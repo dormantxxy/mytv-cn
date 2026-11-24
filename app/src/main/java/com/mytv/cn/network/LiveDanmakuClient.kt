@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -151,7 +152,7 @@ class LiveDanmakuClient(
     }
 
     private suspend fun longPoll(target: LiveRoomItem) {
-        while (isActive && room?.roomId == target.roomId) {
+        while (currentCoroutineContext().isActive && room?.roomId == target.roomId) {
             runCatching {
                 val url = "https://live.douyin.com/webcast/im/fetch/".toHttpUrl().newBuilder()
                     .addQueryParameter("app_name", "douyin_web")

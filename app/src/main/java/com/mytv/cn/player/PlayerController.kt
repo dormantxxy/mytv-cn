@@ -69,7 +69,7 @@ class PlayerController(context: Context) : Closeable {
                         .setUsage(C.USAGE_MEDIA).build(),
                     true
                 )
-                addListener(listener)
+                addListener(playerListener())
             }
         mediaSession = MediaSession.Builder(app, player).build()
         startPolling()
@@ -154,7 +154,7 @@ class PlayerController(context: Context) : Closeable {
     fun seekTo(positionMs: Long) = player.seekTo(positionMs.coerceAtLeast(0))
     fun setSpeed(speed: Float) { player.playbackParameters = PlaybackParameters(speed) }
 
-    private val listener by lazy { object : Player.Listener {
+    private fun playerListener() = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             mutable.value = mutable.value.copy(isPlaying = isPlaying)
         }
@@ -189,7 +189,7 @@ class PlayerController(context: Context) : Closeable {
         override fun onPlayerError(error: PlaybackException) {
             mutable.value = mutable.value.copy(error = error.localizedMessage ?: "播放失败", loading = false)
         }
-    } }
+    }
 
     private fun startPolling() {
         poll?.cancel()

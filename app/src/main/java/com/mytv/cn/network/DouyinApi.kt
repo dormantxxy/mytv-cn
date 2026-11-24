@@ -454,14 +454,14 @@ class DouyinApi(
         )
 
     suspend fun mixDetail(id: String, series: Boolean = false): JsonObject =
-        get(if (series) "/aweme/v1/web/series/detail/" else "/aweme/v1/web/mix/detail/", linkedMapOf(if (series) "series_id" else "mix_id" to id))
+        get(if (series) "/aweme/v1/web/series/detail/" else "/aweme/v1/web/mix/detail/", linkedMapOf((if (series) "series_id" else "mix_id") to id))
 
     suspend fun mixVideos(id: String, cursor: Long = 0, count: Int = 20, series: Boolean = false): Page<VideoItem> =
         DouyinJson.videoPage(
             get(
                 if (series) "/aweme/v1/web/series/aweme/" else "/aweme/v1/web/mix/aweme/",
                 linkedMapOf(
-                    if (series) "series_id" else "mix_id" to id,
+                    (if (series) "series_id" else "mix_id") to id,
                     "cursor" to cursor.toString(),
                     "count" to count.toString(),
                     "pull_type" to "2",
