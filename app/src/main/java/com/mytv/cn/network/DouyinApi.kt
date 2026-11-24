@@ -1,5 +1,6 @@
 package com.mytv.cn.network
 
+import android.content.Context
 import com.mytv.cn.data.AppSettings
 import com.mytv.cn.data.AuthorInfo
 import com.mytv.cn.data.ChannelItem
@@ -24,22 +25,30 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class DouyinApiException(message: String, val needsLogin: Boolean = false) : Exception(message)
+
+internal const val RECOMMEND_PATH = "/aweme/v1/web/tab/feed/"
+internal fun shouldSignWebRequest(path: String): Boolean = path != RECOMMEND_PATH
+internal fun encodeWebQuery(params: Map<String, String>): String = params.entries
+    .filter { it.key.isNotBlank() }
+    .joinToString("&") { "${URLEncoder.encode(it.key, "UTF-8")}=${URLEncoder.encode(it.value, "UTF-8")}" }
 
 /**
  * Direct Web API client reconstructed from the endpoint/parameter call chain in myDV 2.1.37.
  * It deliberately keeps parameter insertion order because a_bogus signs the exact query string.
  */
 class DouyinApi(
+    context: Context,
     private val settingsStore: SettingsStore,
     private val signer: ABogusSigner
 ) {
+    private val app = context.applicationContext
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -47,13 +56,36 @@ class DouyinApi(
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
+    private val bootstrapClient = client.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
 
     init { signer.prepare() }
 
-    suspend fun initializeSession() {
-        withContext(Dispatchers.IO) {
-            if (settingsStore.state.value.cookieMap()["ttwid"].isNullOrBlank()) registerTtwid()
-            bootstrapWebCookies()
+    suspend fun initializeSession() = withContext(Dispatchers.IO) {
+        val existing = settingsStore.state.value.cookieMap()
+        val generated = linkedMapOf(
+            "s_v_web_id" to generateVerifyFp(),
+            "dy_swidth" to "2560",
+            "dy_sheight" to "1440",
+            "device_web_cpu_core" to "24",
+            "device_web_memory_size" to "8"
+        ).filterKeys { existing[it].isNullOrBlank() }
+        if (generated.isNotEmpty()) {
+            settingsStore.mergeSetCookies(generated.map { (key, value) -> "$key=$value" })
+        }
+        if (settingsStore.state.value.cookieMap()["ttwid"].isNullOrBlank()) registerTtwid()
+        bootstrapWebCookies()
+
+        val refreshed = settingsStore.state.value.cookieMap()
+        refreshed["__ac_nonce"]?.takeIf(String::isNotBlank)?.let { nonce ->
+            runCatching { signer.acSignature(nonce) }.getOrNull()
+                ?.takeIf(String::isNotBlank)
+                ?.let { settingsStore.mergeSetCookies(listOf("__ac_signature=$it")) }
+        }
+        if (settingsStore.state.value.cookieMap()["msToken"].isNullOrBlank()) {
+            fetchMsToken()?.let { settingsStore.mergeSetCookies(listOf("msToken=$it")) }
         }
     }
 
@@ -63,6 +95,9 @@ class DouyinApi(
         mobile: Boolean = false,
         seenIds: List<String> = settingsStore.state.value.viewedVideoIds
     ): Page<VideoItem> {
+        val settings = settingsStore.state.value
+        val cookie = settings.cookieMap()
+        val globalId = settingsStore.getOrCreateNumericId("globalwid")
         val params = linkedMapOf(
             "filterGids" to seenIds.takeLast(100).joinToString(","),
             "tag_id" to "",
@@ -84,9 +119,24 @@ class DouyinApi(
             "support_dash" to "1",
             "webcast_sdk_version" to "170400",
             "webcast_version_code" to "170400",
-            "globalwid" to settingsStore.getOrCreateNumericId("globalwid")
+            "screen_width" to (cookie["dy_swidth"] ?: "2560"),
+            "screen_height" to (cookie["dy_sheight"] ?: "1440"),
+            "cpu_core_num" to (cookie["device_web_cpu_core"] ?: "24"),
+            "device_memory" to (cookie["device_web_memory_size"] ?: "8"),
+            "globalwid" to globalId,
+            "webid" to globalId
         )
-        return DouyinJson.videoPage(get("/aweme/v1/web/tab/feed/", params, referer = "$WEB/?recommend=1", userCenter = true))
+        cookie["UIFID"]?.takeIf(String::isNotBlank)?.let { params["uifid"] = it }
+        addUserCenterSignature(params, settings)
+        return DouyinJson.videoPage(
+            get(
+                RECOMMEND_PATH,
+                params,
+                referer = "$WEB/?recommend=1",
+                sign = false,
+                augmentIdentity = false
+            )
+        )
     }
 
     suspend fun followingFeed(cursor: Long = 0, count: Int = 15): Page<VideoItem> {
@@ -519,11 +569,29 @@ class DouyinApi(
         }
     }
 
-    fun playbackHeaders(live: Boolean = false): Map<String, String> = linkedMapOf(
-        "User-Agent" to ABogusSigner.USER_AGENT,
-        "Referer" to if (live) "$LIVE/" else "$WEB/",
-        "Cookie" to settingsStore.state.value.cookie
-    )
+    fun playbackHeaders(live: Boolean = false): Map<String, String> = if (live) {
+        linkedMapOf(
+            "User-Agent" to ABogusSigner.LIVE_USER_AGENT,
+            "Referer" to "$LIVE/",
+            "Accept" to "*/*",
+            "Accept-Language" to "zh-CN",
+            "Cookie" to settingsStore.state.value.cookie
+        )
+    } else {
+        linkedMapOf(
+            "User-Agent" to ABogusSigner.USER_AGENT,
+            "Referer" to "$WEB/",
+            "Accept" to "*/*",
+            "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
+            "sec-ch-ua" to "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"",
+            "sec-ch-ua-mobile" to "?0",
+            "sec-ch-ua-platform" to "\"Windows\"",
+            "Sec-Fetch-Dest" to "video",
+            "Sec-Fetch-Mode" to "no-cors",
+            "Sec-Fetch-Site" to "cross-site",
+            "Cookie" to settingsStore.state.value.cookie
+        )
+    }
 
     private suspend fun interaction(path: String, params: LinkedHashMap<String, String>, referer: String) {
         requireLogin()
@@ -551,8 +619,10 @@ class DouyinApi(
         domain: String = WEB,
         live: Boolean = false,
         referer: String = if (live) "$LIVE/" else "$WEB/",
-        userCenter: Boolean = false
-    ): JsonObject = request(path, params, domain, live, referer, false, userCenter, false)
+        userCenter: Boolean = false,
+        sign: Boolean = shouldSignWebRequest(path),
+        augmentIdentity: Boolean = true
+    ): JsonObject = request(path, params, domain, live, referer, false, userCenter, false, sign, augmentIdentity)
 
     private suspend fun post(
         path: String,
@@ -561,7 +631,7 @@ class DouyinApi(
         live: Boolean = false,
         referer: String = if (live) "$LIVE/" else "$WEB/",
         ticketGuard: Boolean = false
-    ): JsonObject = request(path, params, domain, live, referer, true, false, ticketGuard)
+    ): JsonObject = request(path, params, domain, live, referer, true, false, ticketGuard, true, true)
 
     private suspend fun request(
         path: String,
@@ -571,19 +641,23 @@ class DouyinApi(
         referer: String,
         post: Boolean,
         userCenter: Boolean,
-        ticketGuard: Boolean
+        ticketGuard: Boolean,
+        sign: Boolean,
+        augmentIdentity: Boolean
     ): JsonObject {
         val settings = settingsStore.state.value
-        val params = commonParams(live).apply { putAll(endpointParams.filterValues { it.isNotEmpty() }) }
-        addIdentity(params, settings)
+        val params = commonParams(live).apply { putAll(endpointParams) }
+        if (augmentIdentity) addIdentity(params, settings)
         val guardHeaders = if (ticketGuard) {
             InteractionSigner.ticketGuardParameters(path, settings.interactionSecurity)
         } else emptyMap()
-        var query = query(params)
-        val signature = signer.aBogus(query, "", path, settings.cookie)
-        if (signature.isNotBlank()) params["a_bogus"] = signature
+        var query = encodeWebQuery(params)
+        if (sign) {
+            val signature = if (live) signer.liveABogus(query, "", path) else signer.aBogus(query, "", path)
+            if (signature.isNotBlank()) params["a_bogus"] = signature
+        }
         if (userCenter) addUserCenterSignature(params, settings)
-        query = query(params)
+        query = encodeWebQuery(params)
         val url = "$domain$path?$query"
         val request = Request.Builder()
             .url(url)
@@ -667,8 +741,8 @@ class DouyinApi(
 
     private fun addIdentity(params: LinkedHashMap<String, String>, settings: AppSettings) {
         val cookie = settings.cookieMap()
-        params["msToken"] = cookie["msToken"].orEmpty().ifBlank(::randomMsToken)
-        params["webid"] = cookie["s_v_web_id"] ?: cookie["webid"] ?: settingsStore.getOrCreateNumericId("webid")
+        cookie["msToken"]?.takeIf(String::isNotBlank)?.let { params["msToken"] = it }
+        params["webid"] = cookie["webid"] ?: settingsStore.getOrCreateNumericId("globalwid")
         params["screen_width"] = cookie["dy_swidth"] ?: params["screen_width"].orEmpty()
         params["screen_height"] = cookie["dy_sheight"] ?: params["screen_height"].orEmpty()
         cookie["s_v_web_id"]?.let {
@@ -690,22 +764,34 @@ class DouyinApi(
         cookie: String,
         live: Boolean,
         extra: Map<String, String> = emptyMap()
-    ): Headers = Headers.Builder()
-        .add("User-Agent", ABogusSigner.USER_AGENT)
-        .add("Accept", "application/json, text/plain, */*")
-        .add("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        .add("Referer", referer)
-        .add("Origin", if (live) LIVE else WEB)
-        .add("Cookie", cookie)
-        .add("sec-ch-ua", "\"Chromium\";v=\"147\", \"Not_A Brand\";v=\"8\", \"Google Chrome\";v=\"147\"")
-        .add("sec-ch-ua-mobile", "?0")
-        .add("sec-ch-ua-platform", "\"Windows\"")
-        .apply { extra.forEach { (name, value) -> add(name, value) } }
-        .build()
-
-    private fun query(params: Map<String, String>): String = params.entries
-        .filter { it.key.isNotBlank() && it.value.isNotBlank() }
-        .joinToString("&") { "${encode(it.key)}=${encode(it.value)}" }
+    ): Headers {
+        val builder = Headers.Builder()
+        if (live) {
+            builder
+                .add("Accept", "application/json, text/plain, */*")
+                .add("Accept-Language", "zh-CN")
+                .add("Referer", referer)
+                .add("User-Agent", ABogusSigner.LIVE_USER_AGENT)
+        } else {
+            builder
+                .add("accept", "application/json, text/plain, */*")
+                .add("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .add("cache-control", "no-cache")
+                .add("pragma", "no-cache")
+                .add("priority", "u=1, i")
+                .add("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"147\", \"Google Chrome\";v=\"147\"")
+                .add("sec-ch-ua-mobile", "?0")
+                .add("sec-ch-ua-platform", "\"Windows\"")
+                .add("sec-fetch-dest", "empty")
+                .add("sec-fetch-mode", "cors")
+                .add("sec-fetch-site", "same-origin")
+                .add("user-agent", ABogusSigner.USER_AGENT)
+                .add("referer", referer)
+        }
+        if (cookie.isNotBlank()) builder.add("Cookie", cookie)
+        extra.forEach { (name, value) -> builder.add(name, value) }
+        return builder.build()
+    }
 
     private fun requireLogin() {
         if (!settingsStore.state.value.loggedIn) {
@@ -735,24 +821,69 @@ class DouyinApi(
     }
 
     private fun bootstrapWebCookies() {
-        val request = Request.Builder()
-            .url("$WEB/?recommend=1")
-            .header("User-Agent", ABogusSigner.USER_AGENT)
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .header("Accept-Encoding", "identity")
-            .header("Cookie", settingsStore.state.value.cookie)
-            .build()
-        runCatching {
-            client.newCall(request).execute().use { response ->
-                settingsStore.mergeSetCookies(response.headers("Set-Cookie"))
-            }
+        var target = "$WEB/?recommend=1"
+        repeat(5) {
+            val cookie = settingsStore.state.value.cookie
+            val request = Request.Builder()
+                .url(target)
+                .header("User-Agent", ABogusSigner.USER_AGENT)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .header("Accept-Encoding", "identity")
+                .header("sec-fetch-site", "none")
+                .header("sec-fetch-mode", "navigate")
+                .header("sec-fetch-user", "?1")
+                .header("sec-fetch-dest", "document")
+                .header("sec-ch-ua-platform", "\"Windows\"")
+                .header("sec-ch-ua-mobile", "?0")
+                .header("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\"")
+                .header("Upgrade-Insecure-Requests", "1")
+                .header("Cookie", cookie)
+                .get()
+                .build()
+            val next = runCatching {
+                bootstrapClient.newCall(request).execute().use { response ->
+                    settingsStore.mergeSetCookies(response.headers("Set-Cookie"))
+                    if (response.code !in 300..399) return
+                    response.header("Location")?.let(response.request.url::resolve)?.toString()
+                }
+            }.getOrNull() ?: return
+            target = next
         }
     }
 
-    private fun randomMsToken(): String {
-        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    private fun fetchMsToken(): String? = runCatching {
+        val payload = app.assets.open("runtime/mstoken_payload.json").bufferedReader().use { it.readText() }
+            .let { JSONObject(it) }
+            .put("tspFromClient", System.currentTimeMillis() / 1000)
+            .toString()
+        val request = Request.Builder()
+            .url("https://mssdk.bytedance.com/web/r/token?ms_appid=6383&msToken=1YFEsL4NQgAICNSpgOo3_Yv-ue-AhfJaweBQP0xAJRNQfOqWBTklpusHaMMr80OxFFahFPSxag23YunZwRWW9PXPneC35kCHv00w-2_iQH8PynyH34b8TXekDayIhN2BQAklnxxsbompAg_WQcoErnxP8gBiWXsSkIRlw32-eUYRQu1cDIAd5Q%3D%3D")
+            .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
+            .header("Content-Type", "text/plain;charset=UTF-8")
+            .build()
+        client.newCall(request).execute().use { response ->
+            response.headers("Set-Cookie").asSequence()
+                .mapNotNull { it.substringBefore(';').takeIf { pair -> pair.startsWith("msToken=") } }
+                .map { it.substringAfter('=') }
+                .firstOrNull { it.length == 120 || it.length == 128 }
+        }
+    }.getOrNull()
+
+    private fun generateVerifyFp(): String = buildString {
+        append("verify_")
+        append(randomHex(8))
+        append('_').append(randomHex(4))
+        append('_').append(randomHex(4))
+        append('_').append(randomHex(4))
+        append('_').append(randomHex(12))
+    }
+
+    private fun randomHex(length: Int): String {
+        val alphabet = "0123456789abcdef"
         val random = SecureRandom()
-        return buildString(107) { repeat(107) { append(alphabet[random.nextInt(alphabet.length)]) } }
+        return buildString(length) { repeat(length) { append(alphabet[random.nextInt(alphabet.length)]) } }
     }
 
     private fun md5(value: String): String = MessageDigest.getInstance("MD5")

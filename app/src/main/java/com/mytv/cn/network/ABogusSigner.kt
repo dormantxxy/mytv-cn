@@ -6,6 +6,7 @@ import com.whl.quickjs.android.QuickJSLoader
 import com.whl.quickjs.wrapper.QuickJSContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
 import org.json.JSONObject
 import java.io.Closeable
 import java.util.concurrent.Callable
@@ -32,15 +33,22 @@ class ABogusSigner(context: Context) : Closeable {
         executor.submit { runCatching(::ensureContext) }
     }
 
-    suspend fun aBogus(query: String, body: String = "", path: String, cookie: String = ""): String =
-        onSignerThread {
-            ensureContext()
-            val ctx = context ?: return@onSignerThread ""
-            val script = "(function(){try{return getABogus(" +
-                "${JSONObject.quote(query)},${JSONObject.quote(body)},${JSONObject.quote(path)},${JSONObject.quote(cookie)}" +
-                ");}catch(e){return JSON.stringify({ok:false,error:String(e)});}})()"
-            parseSignedValue(ctx.evaluate(script)?.toString().orEmpty())
-        }
+    suspend fun aBogus(query: String, body: String = "", target: String): String =
+        signABogus(query, body, target, null)
+
+    suspend fun liveABogus(query: String, body: String = "", target: String): String =
+        signABogus(query, body, target, LIVE_USER_AGENT)
+
+    private suspend fun signABogus(
+        query: String,
+        body: String,
+        target: String,
+        userAgentOverride: String?
+    ): String = onSignerThread {
+        ensureContext()
+        val ctx = context ?: return@onSignerThread ""
+        parseSignedValue(ctx.evaluate(buildABogusScript(query, body, target, userAgentOverride))?.toString().orEmpty())
+    }
 
     suspend fun acSignature(url: String): String = onSignerThread {
         ensureContext()
@@ -134,5 +142,18 @@ class ABogusSigner(context: Context) : Closeable {
     companion object {
         private const val TAG = "ABogusSigner"
         const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+        const val LIVE_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.97 Safari/537.36 Core/1.116.567.400 QQBrowser/19.7.6764.400"
     }
+}
+
+internal fun buildABogusScript(
+    query: String,
+    body: String,
+    target: String,
+    userAgentOverride: String?
+): String {
+    val userAgent = userAgentOverride?.let { JsonPrimitive(it).toString() } ?: "undefined"
+    return "(function(){try{return getABogus(" +
+        "${JsonPrimitive(query)},${JsonPrimitive(body)},${JsonPrimitive(target)},$userAgent" +
+        ");}catch(e){return JSON.stringify({ok:false,error:String(e)});}})()"
 }

@@ -40,7 +40,7 @@ class MyApplication : Application() {
         runCatching { QuickJSLoader.init() }.onFailure { Log.w("MYTV", "QuickJS loader failed", it) }
         settings = SettingsStore(this)
         signer = ABogusSigner(this)
-        api = DouyinApi(settings, signer)
+        api = DouyinApi(this, settings, signer)
         player = PlayerController(this)
         liveDanmaku = LiveDanmakuClient(settings, signer)
         qrLogin = QrLoginManager(settings, signer)

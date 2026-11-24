@@ -27,11 +27,15 @@ data class QrLoginState(
     val qrBitmap: Bitmap? = null
 )
 
+internal const val GET_QR_URL = "https://login.douyin.com/passport/web/get_qrcode/"
+internal const val CHECK_QR_URL = "https://login.douyin.com/passport/web/check_qrconnect/"
+
 /** Passport QR flow reconstructed from myDV 2.1.37's QrLoginManager. */
 class QrLoginManager(
     private val settings: SettingsStore,
     private val signer: ABogusSigner
 ) {
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -46,7 +50,7 @@ class QrLoginManager(
             onState(QrLoginState(QrLoginStatus.STARTING, "正在初始化登录会话"))
             execute(
                 Request.Builder().url("https://www.douyin.com/").get()
-                    .headers(passportHeaders("https://www.douyin.com/", cookies)).build(),
+                    .headers(homeHeaders()).build(),
                 cookies
             )
             challenge(cookies)
@@ -145,11 +149,14 @@ class QrLoginManager(
     private suspend fun getQrCode(cookies: LinkedHashMap<String, String>, verifyFp: String): JSONObject {
         val params = passportParams(null, verifyFp, true)
         val rawQuery = query(params)
-        val aBogus = signer.aBogus(rawQuery, "", "/passport/web/get_qrcode/", cookieHeader(cookies))
+        val aBogus = signer.aBogus(rawQuery, "", GET_QR_URL)
         check(aBogus.isNotBlank()) { "登录签名失败" }
+        val headers = passportHeaders("https://www.douyin.com/", cookies).newBuilder()
+            .set("x-tt-passport-csrf-token", cookies["passport_csrf_token"].orEmpty())
+            .build()
         val request = Request.Builder()
-            .url("https://login.douyin.com/passport/web/get_qrcode/?$rawQuery&a_bogus=${encode(aBogus)}")
-            .headers(passportHeaders("https://www.douyin.com/", cookies))
+            .url("$GET_QR_URL?$rawQuery&a_bogus=${encode(aBogus)}")
+            .headers(headers)
             .get()
             .build()
         return responseData(execute(request, cookies))
@@ -163,7 +170,7 @@ class QrLoginManager(
         val params = passportParams(token, verifyFp, false)
         val rawQuery = query(params)
         val body = "token=${encode(token)}"
-        val aBogus = signer.aBogus(rawQuery, "", "/passport/web/check_qrconnect/", cookieHeader(cookies))
+        val aBogus = signer.aBogus(rawQuery, "", CHECK_QR_URL)
         check(aBogus.isNotBlank()) { "登录轮询签名失败" }
         val headers = passportHeaders("https://www.douyin.com/", cookies).newBuilder()
             .set("Content-Type", "application/x-www-form-urlencoded")
@@ -172,7 +179,7 @@ class QrLoginManager(
             .set("x-secsdk-csrf-token", cookies["__ac_nonce"].orEmpty())
             .build()
         val request = Request.Builder()
-            .url("https://login.douyin.com/passport/web/check_qrconnect/?$rawQuery&a_bogus=${encode(aBogus)}")
+            .url("$CHECK_QR_URL?$rawQuery&a_bogus=${encode(aBogus)}")
             .headers(headers)
             .post(body.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
             .build()
@@ -262,7 +269,23 @@ class QrLoginManager(
         .add("sec-ch-ua", "\"Chromium\";v=\"147\", \"Not_A Brand\";v=\"8\", \"Google Chrome\";v=\"147\"")
         .add("sec-ch-ua-mobile", "?0")
         .add("sec-ch-ua-platform", "\"Windows\"")
+        .add("sec-fetch-dest", "empty")
+        .add("sec-fetch-mode", "cors")
+        .add("sec-fetch-site", "same-site")
         .add("Cookie", cookieHeader(cookies))
+        .build()
+
+    private fun homeHeaders() = okhttp3.Headers.Builder()
+        .add("User-Agent", ABogusSigner.USER_AGENT)
+        .add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .add("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+        .add("sec-ch-ua", "\"Chromium\";v=\"147\", \"Not_A Brand\";v=\"8\", \"Google Chrome\";v=\"147\"")
+        .add("sec-ch-ua-mobile", "?0")
+        .add("sec-ch-ua-platform", "\"Windows\"")
+        .add("sec-fetch-dest", "document")
+        .add("sec-fetch-mode", "navigate")
+        .add("sec-fetch-site", "none")
+        .add("Referer", "https://www.douyin.com/")
         .build()
 
     private fun mergeCookie(cookies: MutableMap<String, String>, header: String) {
