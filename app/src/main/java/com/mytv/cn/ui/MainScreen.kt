@@ -10,7 +10,6 @@ import android.content.Intent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -82,7 +81,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -162,8 +160,6 @@ fun MyTvApp(viewModel: MainViewModel, isInPictureInPicture: Boolean) {
                             player = viewModel.player,
                             playerState = playerState,
                             onSelectVideo = viewModel::selectVideo,
-                            onNext = viewModel::nextVideo,
-                            onPrevious = viewModel::previousVideo,
                             onTogglePlayback = viewModel::togglePlayback,
                             onFeedKind = viewModel::selectFeedKind,
                             onFeaturedChannel = viewModel::selectFeaturedChannel,
@@ -195,7 +191,6 @@ fun MyTvApp(viewModel: MainViewModel, isInPictureInPicture: Boolean) {
                             onTab = viewModel::selectProfileTab,
                             onVideo = viewModel::openVideo,
                             onLogin = viewModel::startQrLogin,
-                            onCompanion = viewModel::startCompanionServer,
                             onSettings = viewModel::showSettings,
                             onRefresh = viewModel::refresh
                         )
@@ -240,9 +235,6 @@ fun MyTvApp(viewModel: MainViewModel, isInPictureInPicture: Boolean) {
                 if (ui.qrLogin.status != QrLoginStatus.IDLE) {
                     QrLoginDialog(ui, viewModel::closeQrLogin)
                 }
-                if (ui.companionQr != null) {
-                    CompanionDialog(ui, viewModel::stopCompanionServer)
-                }
             }
         }
     }
@@ -254,8 +246,6 @@ private fun VideoFeedScreen(
     player: Player,
     playerState: PlayerState,
     onSelectVideo: (Int) -> Unit,
-    onNext: () -> Unit,
-    onPrevious: () -> Unit,
     onTogglePlayback: () -> Unit,
     onFeedKind: (FeedKind) -> Unit,
     onFeaturedChannel: (ChannelItem) -> Unit,
@@ -331,19 +321,6 @@ private fun VideoFeedScreen(
 
         FeedTopBar(ui, onFeedKind, onFeaturedChannel)
 
-        Row(
-            modifier = Modifier.align(Alignment.CenterStart).padding(start = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TvEdgeButton("上一条", onPrevious)
-        }
-        Row(
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 4.dp, top = 390.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TvEdgeButton("下一条", onNext)
-        }
-
         if (playerState.loading) {
             CircularProgressIndicator(
                 color = Color.White,
@@ -401,23 +378,14 @@ private fun FeedTopBar(
 
 @Composable
 private fun ChannelPill(title: String, selected: Boolean, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
     Text(
         text = title,
         color = Color.White,
-        fontWeight = if (selected || focused) FontWeight.Bold else FontWeight.Normal,
+        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
         modifier = Modifier
-            .onFocusChanged { focused = it.isFocused }
             .clip(RoundedCornerShape(20.dp))
-            .background(
-                when {
-                    focused -> Color.White.copy(alpha = .28f)
-                    selected -> BrandRed
-                    else -> Color.Black.copy(alpha = .46f)
-                }
-            )
+            .background(if (selected) BrandRed else Color.Black.copy(alpha = .46f))
             .clickable(onClick = onClick)
-            .focusable()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     )
 }
@@ -543,13 +511,10 @@ private fun LiveScreen(
 
 @Composable
 private fun LiveCard(item: LiveRoomItem, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
     Column(
-        Modifier.onFocusChanged { focused = it.isFocused }
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (focused) Color.White.copy(.16f) else PanelBlack)
+        Modifier.clip(RoundedCornerShape(12.dp))
+            .background(PanelBlack)
             .clickable(onClick = onClick)
-            .focusable()
     ) {
         Box {
             AsyncImage(
@@ -660,7 +625,6 @@ private fun ProfileScreen(
     onTab: (ProfileTab) -> Unit,
     onVideo: (VideoItem) -> Unit,
     onLogin: () -> Unit,
-    onCompanion: () -> Unit,
     onSettings: () -> Unit,
     onRefresh: () -> Unit
 ) {
@@ -677,9 +641,8 @@ private fun ProfileScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Icon(Icons.Rounded.Person, null, Modifier.size(76.dp), tint = TextMuted)
                     Text("登录后查看个人主页", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Text("支持抖音扫码、粘贴 Cookie 或局域网推送", color = TextMuted)
+                    Text("支持抖音扫码或粘贴 Cookie", color = TextMuted)
                     Button(onClick = onLogin) { Text("扫码登录") }
-                    OutlinedButton(onClick = onCompanion) { Text("局域网推送") }
                     OutlinedButton(onClick = onSettings) { Text("粘贴 Cookie") }
                 }
             }
@@ -774,13 +737,10 @@ private fun AuthorRow(author: AuthorInfo) {
 
 @Composable
 private fun VideoGridCard(item: VideoItem, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
     Column(
-        Modifier.onFocusChanged { focused = it.isFocused }
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (focused) Color.White.copy(.16f) else PanelBlack)
+        Modifier.clip(RoundedCornerShape(10.dp))
+            .background(PanelBlack)
             .clickable(onClick = onClick)
-            .focusable()
     ) {
         AsyncImage(
             model = item.cover,
@@ -933,24 +893,6 @@ private fun QrLoginDialog(ui: MainUiState, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun CompanionDialog(ui: MainUiState, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("局域网推送") },
-        text = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                ui.companionQr?.let { bitmap ->
-                    Image(bitmap.asImageBitmap(), "局域网推送地址二维码", Modifier.size(260.dp).background(Color.White).padding(8.dp))
-                }
-                Text(ui.companionUrl, color = BrandCyan)
-                Text("手机与本机连接同一网络后扫码，可推送 Cookie 和互动凭据。", color = TextMuted)
-            }
-        },
-        confirmButton = { Button(onClick = onDismiss) { Text("停止服务") } }
-    )
-}
-
-@Composable
 private fun RootBottomBar(selected: RootTab, onSelected: (RootTab) -> Unit, modifier: Modifier = Modifier) {
     val items = listOf(
         Triple(RootTab.HOME, Icons.Rounded.Home, "首页"),
@@ -965,16 +907,14 @@ private fun RootBottomBar(selected: RootTab, onSelected: (RootTab) -> Unit, modi
         verticalAlignment = Alignment.CenterVertically
     ) {
         items.forEach { (tab, icon, label) ->
-            var focused by remember { mutableStateOf(false) }
             Column(
-                modifier = Modifier.weight(1f).onFocusChanged { focused = it.isFocused }
-                    .clickable { onSelected(tab) }.focusable().padding(vertical = 7.dp),
+                modifier = Modifier.weight(1f).clickable { onSelected(tab) }.padding(vertical = 7.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Icon(icon, label, tint = if (selected == tab || focused) Color.White else TextMuted, modifier = Modifier.size(24.dp))
+                Icon(icon, label, tint = if (selected == tab) Color.White else TextMuted, modifier = Modifier.size(24.dp))
                 Text(
                     label,
-                    color = if (selected == tab || focused) Color.White else TextMuted,
+                    color = if (selected == tab) Color.White else TextMuted,
                     fontSize = 11.sp,
                     fontWeight = if (selected == tab) FontWeight.Bold else FontWeight.Normal
                 )
@@ -996,21 +936,6 @@ private fun EmptyState(message: String, onRetry: () -> Unit) {
             }
         }
     }
-}
-
-@Composable
-private fun TvEdgeButton(label: String, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Text(
-        label,
-        color = Color.White,
-        fontSize = 10.sp,
-        modifier = Modifier.onFocusChanged { focused = it.isFocused }
-            .background(if (focused) BrandRed else Color.Black.copy(alpha = .22f), RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
-            .focusable()
-            .padding(horizontal = 6.dp, vertical = 4.dp)
-    )
 }
 
 @Composable

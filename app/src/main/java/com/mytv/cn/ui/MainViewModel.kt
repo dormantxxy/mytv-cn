@@ -1,7 +1,6 @@
 package com.mytv.cn.ui
 
 import android.app.Application
-import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
@@ -21,16 +20,13 @@ import com.mytv.cn.data.VideoItem
 import com.mytv.cn.network.QrLoginState
 import com.mytv.cn.network.QrLoginStatus
 import com.mytv.cn.player.PlayerState
-import com.mytv.cn.server.CompanionServer
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 
 data class MainUiState(
@@ -57,8 +53,6 @@ data class MainUiState(
     val commentsLoading: Boolean = false,
     val settingsOpen: Boolean = false,
     val qrLogin: QrLoginState = QrLoginState(),
-    val companionUrl: String = "",
-    val companionQr: Bitmap? = null,
     val loading: Boolean = false,
     val loadingMore: Boolean = false,
     val message: String = ""
@@ -78,7 +72,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var qrLoginJob: Job? = null
     private var feedPage = 1
     private var feedCursor = 0L
-    private var companionServer: CompanionServer? = null
 
     init {
         viewModelScope.launch {
@@ -364,7 +357,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateSearchQuery(value: String) {
         mutable.update { it.copy(searchQuery = value.take(100)) }
-        companionServer?.updateTvText(value.take(100))
     }
 
     private fun loadSearchHome(force: Boolean) {
@@ -498,41 +490,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(qrLogin = QrLoginState()) }
     }
 
-    fun startCompanionServer() {
-        if (companionServer != null) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val server = CompanionServer(
-                getApplication<Application>(),
-                app.settings,
-                onSearchInput = ::updateSearchQuery,
-                onSearch = { query ->
-                    mutable.update { it.copy(selectedTab = RootTab.SEARCH) }
-                    submitSearch(query)
-                }
-            )
-            runCatching {
-                server.start()
-                val url = server.submitUrl ?: error("未连接局域网")
-                val qr = CompanionServer.qrBitmap(url)
-                companionServer = server
-                withContext(Dispatchers.Main) {
-                    mutable.update { it.copy(companionUrl = url, companionQr = qr, message = "局域网服务已启动") }
-                }
-            }.onFailure { error ->
-                server.close()
-                viewModelScope.launch(Dispatchers.Main) {
-                    mutable.update { it.copy(message = error.userMessage()) }
-                }
-            }
-        }
-    }
-
-    fun stopCompanionServer() {
-        companionServer?.close()
-        companionServer = null
-        mutable.update { it.copy(companionUrl = "", companionQr = null) }
-    }
-
     fun dismissMessage() = mutable.update { it.copy(message = "") }
 
     fun handleBack(): Boolean {
@@ -568,12 +525,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 message = error.userMessage()
             )
         }
-    }
-
-    override fun onCleared() {
-        companionServer?.close()
-        companionServer = null
-        super.onCleared()
     }
 
     companion object {

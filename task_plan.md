@@ -1,14 +1,14 @@
 # MYTV 抖音版完整移植计划
 
 ## 目标
-以设备中 `com.github.mytv.dv` 2.1.37 为行为基线，交付可维护源码的 Android App：包名 `com.mytv.cn`，原 assets 完整保留，功能不漏项，界面改为克制的抖音式沉浸体验；Release 启用 R8、使用固定签名，并由 GitHub Actions 构建和发布 GitHub Release。
+以设备中 `com.github.mytv.dv` 2.1.37 为行为基线，交付仅面向 Android 手机、可维护源码的 App：包名 `com.mytv.cn`，原 assets 完整保留，功能不漏项，界面改为克制的抖音式沉浸体验；Release 启用 R8、使用固定签名，并由 GitHub Actions 构建和发布 GitHub Release。
 
 ## 验收标准
 - 能从全新检出构建 Debug 与签名 Release APK。
 - `applicationId` 与运行时包名均为 `com.mytv.cn`。
 - 建立逐项功能矩阵，并对 2.1.37 可观察功能完成实现与回归。
 - 原 APK 的 assets 有来源清单和哈希核对，不遗漏非生成资源。
-- 主要页面具有抖音式全屏内容、低干扰导航、遥控器/触屏/返回键可用性。
+- 主要页面具有抖音式全屏内容、低干扰导航、触屏与返回键可用性。
 - Release `minifyEnabled=true`、`shrinkResources=true`，R8 构建通过，必要反射/序列化规则完整。
 - 固定 keystore 不进仓库；CI 使用固定签名 Secret，产物验签指纹稳定。
 - 推送源码，CI 成功，并发布带签名 APK 与校验值的 Release。
@@ -16,6 +16,7 @@
 ## 范围约束
 - 不复制未知许可的反编译源码；优先寻找上游源码，缺失部分按行为和公开接口独立重写。
 - assets 按用户要求沿用；发布前保留来源/许可风险说明。
+- 目标平台仅 Android 手机；TV/Leanback、遥控焦点、平板专项布局与局域网电视推送不再纳入范围。
 - 不改动设备上原 App 的数据，不卸载任何应用。
 
 ## Phases
@@ -39,7 +40,7 @@
 ### Phase 4: 抖音式 UI 改造
 **Status:** pending
 - 全屏沉浸视频/直播、顶部频道、底部导航、右侧操作列和抽屉层。
-- 同时保证 TV 遥控焦点、横竖屏、触屏与无障碍。
+- 保证手机触屏、纵向沉浸体验、返回行为与无障碍。
 
 ### Phase 5: R8、固定签名与供应链配置
 **Status:** pending
@@ -49,7 +50,7 @@
 ### Phase 6: 构建、真机与功能回归
 **Status:** pending
 - 单元/集成检查、Debug/Release 构建。
-- 安装到 Android 12 设备，按功能矩阵回归并记录证据。
+- 安装到 Android 12 手机，按功能矩阵回归并记录证据。
 
 ### Phase 7: 推送、CI 与 Release 发布
 **Status:** pending

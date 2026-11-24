@@ -87,15 +87,11 @@ class MainActivity : ComponentActivity() {
                     viewModel.player.pause()
                     return true
                 }
-                KeyEvent.KEYCODE_MEDIA_NEXT,
-                KeyEvent.KEYCODE_CHANNEL_DOWN,
-                KeyEvent.KEYCODE_PAGE_DOWN -> {
+                KeyEvent.KEYCODE_MEDIA_NEXT -> {
                     viewModel.nextVideo()
                     return true
                 }
-                KeyEvent.KEYCODE_MEDIA_PREVIOUS,
-                KeyEvent.KEYCODE_CHANNEL_UP,
-                KeyEvent.KEYCODE_PAGE_UP -> {
+                KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
                     viewModel.previousVideo()
                     return true
                 }
