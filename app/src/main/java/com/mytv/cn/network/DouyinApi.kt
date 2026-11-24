@@ -720,8 +720,6 @@ class DouyinApi(
         "engine_version" to "147.0.0.0",
         "os_name" to "Windows",
         "os_version" to "10",
-        "cpu_core_num" to "24",
-        "device_memory" to "8",
         "platform" to "PC",
         "downlink" to "10",
         "effective_type" to "4g",
@@ -742,14 +740,16 @@ class DouyinApi(
     private fun addIdentity(params: LinkedHashMap<String, String>, settings: AppSettings) {
         val cookie = settings.cookieMap()
         cookie["msToken"]?.takeIf(String::isNotBlank)?.let { params["msToken"] = it }
-        params["webid"] = cookie["webid"] ?: settingsStore.getOrCreateNumericId("globalwid")
         params["screen_width"] = cookie["dy_swidth"] ?: params["screen_width"].orEmpty()
         params["screen_height"] = cookie["dy_sheight"] ?: params["screen_height"].orEmpty()
+        params["cpu_core_num"] = cookie["device_web_cpu_core"] ?: "24"
+        params["device_memory"] = cookie["device_web_memory_size"] ?: "8"
         cookie["s_v_web_id"]?.let {
             params["verifyFp"] = it
             params["fp"] = it
         }
         (cookie["UIFID"] ?: cookie["UIFID_TEMP"])?.takeIf(String::isNotBlank)?.let { params["uifid"] = it }
+        params["webid"] = cookie["webid"] ?: settingsStore.getOrCreateNumericId("globalwid")
     }
 
     private fun addUserCenterSignature(params: LinkedHashMap<String, String>, settings: AppSettings) {
