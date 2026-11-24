@@ -19,7 +19,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         buildConfigField("String", "UPSTREAM_REPOSITORY", "\"mytv-android/myDV\"")
-        buildConfigField("String", "RELEASE_REPOSITORY", "\"dormantxxy/mytv-dv\"")
+        buildConfigField("String", "RELEASE_REPOSITORY", "\"dormantxxy/mytv-cn\"")
     }
 
     val keyStorePath = providers.gradleProperty("MYTV_KEYSTORE").orNull
