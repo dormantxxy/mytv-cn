@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MYTV</string>
+    <string name="pip_pause">暂停</string>
+    <string name="pip_play">播放</string>
+    <string name="pip_next">下一条</string>
+</resources>

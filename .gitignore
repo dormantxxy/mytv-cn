@@ -5,3 +5,13 @@ app/build/
 build/
 .gradle/
 local.properties
+
+# 本次项目的本地参考、取证与私密签名材料
+参考资料/
+取证资料/
+本地签名/
+构建日志/
+构建产物/
+*.jks
+*.keystore
+keystore.properties
