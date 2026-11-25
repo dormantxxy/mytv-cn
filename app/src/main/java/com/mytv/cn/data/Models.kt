@@ -75,7 +75,8 @@ data class VideoSource(
     val width: Int = 0,
     val height: Int = 0,
     val bitRate: Long = 0,
-    val fps: Int = 0
+    val fps: Int = 0,
+    val urls: List<String> = emptyList()
 )
 
 data class AuthorInfo(
@@ -114,6 +115,8 @@ data class VideoItem(
     val cover: String = "",
     val dynamicCover: String = "",
     val sources: List<VideoSource> = emptyList(),
+    val playAddrUrls: List<String> = emptyList(),
+    val playAddr265Urls: List<String> = emptyList(),
     val width: Int = 0,
     val height: Int = 0,
     val durationMs: Long = 0,

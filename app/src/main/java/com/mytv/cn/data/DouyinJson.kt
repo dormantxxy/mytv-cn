@@ -26,7 +26,9 @@ object DouyinJson {
     fun videoPage(root: JsonObject): Page<VideoItem> {
         val videos = collectObjects(root) { obj ->
             obj.str("aweme_id", "item_id", "group_id").isNotBlank() && obj.obj("video") != null
-        }.mapNotNull(::video).distinctBy(VideoItem::id)
+        }.mapNotNull(::video)
+            .filter { it.raw.int("aweme_type", "type") == 0 && it.playAddrUrls.isNotEmpty() }
+            .distinctBy(VideoItem::id)
         return Page(videos, root.long("max_cursor", "cursor", "offset"), root.bool("has_more"), root.str("search_id"))
     }
 
@@ -41,29 +43,38 @@ object DouyinJson {
         val height = video.int("height")
         val cover = firstUrl(video.obj("cover", "origin_cover", "poster"))
         val dynamicCover = firstUrl(video.obj("dynamic_cover", "animated_cover"))
+        val playAddrUrls = urlList(video.obj("play_addr"))
+        val playAddr265Urls = urlList(video.obj("play_addr_265"))
         val sources = buildList {
             video.arr("bit_rate", "bitrate").objects().forEach { rate ->
-                val address = rate.obj("play_addr", "play_addr_265", "download_addr")
-                urlList(address).forEach { url ->
-                    add(
-                        VideoSource(
-                            url = url,
-                            quality = rate.str("gear_name", "quality_type", "format").ifBlank { "默认" },
-                            codec = if (rate.bool("is_h265", "is_bytevc1") || rate.int("is_h265", "is_bytevc1") == 1) "h265" else "h264",
-                            width = address?.int("width")?.takeIf { it > 0 } ?: width,
-                            height = address?.int("height")?.takeIf { it > 0 } ?: height,
-                            bitRate = rate.long("bit_rate", "bitrate"),
-                            fps = rate.int("FPS", "fps")
-                        )
+                val address = rate.obj("play_addr") ?: rate.obj("play_addr_265") ?: rate.obj("download_addr")
+                val urls = urlList(address)
+                if (urls.isNotEmpty()) add(
+                    VideoSource(
+                        url = selectBestPlayUrl(urls),
+                        quality = rate.str("gear_name", "quality_type", "format").ifBlank { "默认" },
+                        codec = if (rate.bool("is_h265", "is_bytevc1") || rate.int("is_h265", "is_bytevc1") == 1) "h265" else "h264",
+                        width = address?.int("width")?.takeIf { it > 0 } ?: width,
+                        height = address?.int("height")?.takeIf { it > 0 } ?: height,
+                        bitRate = rate.long("bit_rate", "bitrate"),
+                        fps = rate.int("FPS", "fps"),
+                        urls = urls
                     )
-                }
+                )
             }
             if (isEmpty()) {
                 listOf("play_addr", "play_addr_265", "download_addr").forEach { key ->
-                    val address = video.obj(key)
-                    urlList(address).forEach { url ->
-                        add(VideoSource(url, key, if (key.contains("265")) "h265" else "h264", width, height))
-                    }
+                    val urls = urlList(video.obj(key))
+                    if (urls.isNotEmpty()) add(
+                        VideoSource(
+                            url = selectBestPlayUrl(urls),
+                            quality = key,
+                            codec = if (key.contains("265")) "h265" else "h264",
+                            width = width,
+                            height = height,
+                            urls = urls
+                        )
+                    )
                 }
             }
         }.distinctBy(VideoSource::url)
@@ -85,6 +96,8 @@ object DouyinJson {
             cover = cover,
             dynamicCover = dynamicCover,
             sources = sources,
+            playAddrUrls = playAddrUrls,
+            playAddr265Urls = playAddr265Urls,
             width = width,
             height = height,
             durationMs = video.long("duration"),
@@ -105,26 +118,43 @@ object DouyinJson {
     }
 
     fun selectVideoSource(item: VideoItem, settings: AppSettings): VideoSource? {
-        if (item.sources.isEmpty()) return null
-        var candidates = when (settings.codecPreference) {
-            CodecPreference.H264 -> item.sources.filter { it.codec == "h264" }
+        val candidates = when (settings.codecPreference) {
             CodecPreference.H265 -> item.sources.filter { it.codec == "h265" }
+            CodecPreference.H264 -> item.sources.filter { it.codec == "h264" }
             CodecPreference.AUTO -> item.sources
         }
-        if (candidates.isEmpty()) candidates = item.sources
-        val sorted = candidates.sortedWith(
-            compareByDescending<VideoSource> { it.height * it.width }
-                .thenByDescending { it.fps }
-                .thenByDescending { if (it.codec == "h265") 1 else 0 }
-                .thenByDescending { it.bitRate }
-        )
         val target = settings.videoResolution.targetHeight
-        return when (settings.videoResolution) {
-            VideoResolution.AUTO, VideoResolution.HIGHEST -> sorted.first()
-            else -> sorted.filter { it.height in 1..target }.maxByOrNull { it.height }
-                ?: sorted.minByOrNull { kotlin.math.abs(it.height - target) }
-        }
+        val urls = when (settings.videoResolution) {
+            VideoResolution.AUTO ->
+                if (settings.codecPreference == CodecPreference.H265) {
+                    item.playAddr265Urls.ifEmpty(item.playAddrUrls::ifEmpty)
+                } else item.playAddrUrls
+            VideoResolution.HIGHEST ->
+                (candidates.maxByOrNull { it.width * it.height } ?: candidates.maxByOrNull { it.bitRate })
+                    ?.urls?.ifEmpty(item.playAddrUrls::ifEmpty)
+            else ->
+                candidates.firstOrNull { it.quality.contains(target.toString(), ignoreCase = true) }?.urls
+                    ?: item.playAddrUrls
+        }.filter(String::isNotBlank)
+        if (urls.isEmpty()) return null
+        return VideoSource(
+            url = selectBestPlayUrl(urls),
+            quality = settings.videoResolution.label,
+            codec = if (settings.codecPreference == CodecPreference.H265) "h265" else "h264",
+            urls = urls
+        )
     }
+
+    /** 2.1.37 VideoPlayUrlResolver.selectBestPlayUrl: signed CDN path first, API play URL next. */
+    fun selectBestPlayUrl(urls: List<String>): String {
+        if (urls.isEmpty()) return ""
+        urls.firstOrNull { signedPathPattern.containsMatchIn(it) }?.let { return it }
+        urls.firstOrNull { "douyin.com/aweme/v1/play" in it }?.let { return it }
+        urls.firstOrNull { "signature=" in it && "douyinvod.com" in it }?.let { return it }
+        return urls.last()
+    }
+
+    private val signedPathPattern = Regex("douyinvod\\.com/[0-9a-f]{32}/[0-9a-f]{8}/")
 
     fun author(value: JsonObject?): AuthorInfo {
         val obj = value ?: return AuthorInfo()
