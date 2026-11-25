@@ -50,6 +50,8 @@ data class MainUiState(
     val userProfileHasMore: Boolean = false,
     val commentReplies: Map<String, List<CommentItem>> = emptyMap(),
     val commentsHasMore: Boolean = false,
+    val commentsCursor: Long = 0L,
+    val userProfileCursor: Long = 0L,
     val videoDanmaku: List<DanmakuItem> = emptyList(),
     val liveMessages: List<LiveDanmakuItem> = emptyList(),
     val profile: AuthorInfo? = null,
@@ -81,8 +83,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var qrLoginJob: Job? = null
     private var feedPage = 1
     private var feedCursor = 0L
-    private var userProfileCursor = 0L
-    private var commentsCursor = 0L
 
     init {
         viewModelScope.launch {
@@ -574,19 +574,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 userProfile = author,
                 userProfileVideos = emptyList(),
                 userProfileHasMore = false,
+                userProfileCursor = 0L,
                 commentsOpen = false,
                 settingsOpen = false
             )
         }
-        userProfileCursor = 0L
         viewModelScope.launch {
             try {
                 val profile = if (author.nickname.isBlank()) app.api.userProfile(author.secUid) else author
                 val page = app.api.userPosts(profile.secUid)
-                userProfileCursor = page.cursor
                 if (mutable.value.userProfile?.secUid == profile.secUid || mutable.value.userProfile?.secUid.isNullOrBlank()) {
                     mutable.update {
-                        it.copy(userProfile = profile, userProfileVideos = page.items, userProfileHasMore = page.hasMore)
+                        it.copy(userProfile = profile, userProfileVideos = page.items, userProfileHasMore = page.hasMore, userProfileCursor = page.cursor)
                     }
                 }
             } catch (error: Throwable) {
@@ -602,13 +601,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             mutable.update { it.copy(loadingMore = true) }
             try {
-                val page = app.api.userPosts(profile.secUid, userProfileCursor)
-                userProfileCursor = page.cursor
+                val page = app.api.userPosts(profile.secUid, mutable.value.userProfileCursor)
                 if (mutable.value.userProfile?.secUid == profile.secUid) {
                     mutable.update {
                         it.copy(
                             userProfileVideos = (it.userProfileVideos + page.items).distinctBy(VideoItem::id),
                             userProfileHasMore = page.hasMore,
+                            userProfileCursor = page.cursor,
                             loadingMore = false
                         )
                     }
