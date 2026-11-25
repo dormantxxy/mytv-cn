@@ -149,7 +149,7 @@ object DouyinJson {
     fun selectBestPlayUrl(urls: List<String>): String {
         if (urls.isEmpty()) return ""
         urls.firstOrNull { signedPathPattern.containsMatchIn(it) }?.let { return it }
-        urls.firstOrNull { "douyin.com/aweme/v1/play" in it }?.let { return it }
+        urls.firstOrNull { "douyin.com/aweme/v1/play" in it && "://www.iesdouyin.com" !in it }?.let { return it }
         urls.firstOrNull { "signature=" in it && "douyinvod.com" in it }?.let { return it }
         return urls.last()
     }
