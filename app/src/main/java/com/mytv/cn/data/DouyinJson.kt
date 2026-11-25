@@ -127,15 +127,15 @@ object DouyinJson {
         val urls = when (settings.videoResolution) {
             VideoResolution.AUTO ->
                 if (settings.codecPreference == CodecPreference.H265) {
-                    item.playAddr265Urls.ifEmpty(item.playAddrUrls::ifEmpty)
+                    item.playAddr265Urls.ifEmpty { item.playAddrUrls }
                 } else item.playAddrUrls
             VideoResolution.HIGHEST ->
                 (candidates.maxByOrNull { it.width * it.height } ?: candidates.maxByOrNull { it.bitRate })
-                    ?.urls?.ifEmpty(item.playAddrUrls::ifEmpty)
+                    ?.urls?.ifEmpty { item.playAddrUrls }
             else ->
                 candidates.firstOrNull { it.quality.contains(target.toString(), ignoreCase = true) }?.urls
                     ?: item.playAddrUrls
-        }.filter(String::isNotBlank)
+        }.orEmpty().filter(String::isNotBlank)
         if (urls.isEmpty()) return null
         return VideoSource(
             url = selectBestPlayUrl(urls),
