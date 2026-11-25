@@ -10,7 +10,9 @@ import com.mytv.cn.data.AuthorInfo
 import com.mytv.cn.data.ChannelItem
 import com.mytv.cn.data.CollectionFolder
 import com.mytv.cn.data.CommentItem
+import com.mytv.cn.data.DanmakuItem
 import com.mytv.cn.data.DouyinJson
+import com.mytv.cn.data.LiveDanmakuItem
 import com.mytv.cn.data.FeedKind
 import com.mytv.cn.data.LiveRoomItem
 import com.mytv.cn.data.ProfileTab
@@ -43,6 +45,13 @@ data class MainUiState(
     val searchQuery: String = "",
     val hotWords: List<String> = emptyList(),
     val searchResults: SearchResults = SearchResults(),
+    val userProfile: AuthorInfo? = null,
+    val userProfileVideos: List<VideoItem> = emptyList(),
+    val userProfileHasMore: Boolean = false,
+    val commentReplies: Map<String, List<CommentItem>> = emptyMap(),
+    val commentsHasMore: Boolean = false,
+    val videoDanmaku: List<DanmakuItem> = emptyList(),
+    val liveMessages: List<LiveDanmakuItem> = emptyList(),
     val profile: AuthorInfo? = null,
     val profileTab: ProfileTab = ProfileTab.WORKS,
     val profileVideos: List<VideoItem> = emptyList(),
@@ -72,11 +81,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var qrLoginJob: Job? = null
     private var feedPage = 1
     private var feedCursor = 0L
+    private var userProfileCursor = 0L
+    private var commentsCursor = 0L
 
     init {
         viewModelScope.launch {
             runCatching { app.api.initializeSession() }
             loadSelectedTab(force = true)
+        }
+        viewModelScope.launch {
+            app.liveDanmaku.messages.collect { list ->
+                if (mutable.value.currentLive != null) {
+                    mutable.update { it.copy(liveMessages = list.filter { m -> m.type != "online" }.takeLast(30)) }
+                }
+            }
         }
     }
 
@@ -213,6 +231,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(currentVideoIndex = index, message = "") }
         app.settings.markViewed(item.id)
         app.player.playVideo(item, settings.value, app.api.playbackHeaders())
+        mutable.update { it.copy(videoDanmaku = emptyList()) }
+        if (settings.value.videoDanmaku && item.durationMs > 0) {
+            viewModelScope.launch {
+                runCatching { app.api.videoDanmaku(item, 0, item.durationMs) }
+                    .onSuccess { list ->
+                        if (currentVideo()?.id == item.id && mutable.value.videoDanmaku.isEmpty()) {
+                            mutable.update { it.copy(videoDanmaku = list) }
+                        }
+                    }
+            }
+        }
         viewModelScope.launch {
             app.api.writeHistory(item.author.uid, item.id)
             app.api.reportPlay(item.id)
@@ -236,6 +265,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 selectedTab = RootTab.HOME,
                 videos = listOf(item),
                 currentVideoIndex = 0,
+                feedHasMore = false,
                 commentsOpen = false,
                 settingsOpen = false
             )
@@ -260,12 +290,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun showComments() {
         val item = currentVideo() ?: return
-        mutable.update { it.copy(commentsOpen = true, commentsLoading = true, comments = emptyList()) }
+        mutable.update {
+            it.copy(commentsOpen = true, commentsLoading = true, comments = emptyList(), commentReplies = emptyMap(), commentsHasMore = false)
+        }
         viewModelScope.launch {
             try {
-                val comments = app.api.comments(item.id).items
+                val page = app.api.comments(item.id)
                 if (mutable.value.commentsOpen) {
-                    mutable.update { it.copy(comments = comments, commentsLoading = false) }
+                    mutable.update {
+                        it.copy(comments = page.items, commentsLoading = false, commentsCursor = page.cursor, commentsHasMore = page.hasMore)
+                    }
                 }
             } catch (error: Throwable) {
                 mutable.update { it.copy(commentsLoading = false, message = error.userMessage()) }
@@ -342,7 +376,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val quality = DouyinJson.selectLiveQuality(room, settings.value)
                     ?: error("直播流不可用")
                 app.player.playLive(room, quality, app.api.playbackHeaders(live = true))
-                mutable.update { it.copy(currentLive = room, loading = false) }
+                app.liveDanmaku.connect(room)
+                mutable.update { it.copy(currentLive = room, loading = false, selectedTab = RootTab.LIVE, liveMessages = emptyList()) }
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 showError(error, true)
@@ -352,7 +387,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeLive() {
         app.player.pause()
-        mutable.update { it.copy(currentLive = null) }
+        app.liveDanmaku.disconnect()
+        mutable.update { it.copy(currentLive = null, liveMessages = emptyList()) }
     }
 
     fun updateSearchQuery(value: String) {
@@ -490,6 +526,106 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mutable.update { it.copy(qrLogin = QrLoginState()) }
     }
 
+    fun loadMoreComments() {
+        val item = currentVideo() ?: return
+        val state = mutable.value
+        if (!state.commentsOpen || state.commentsLoading || !state.commentsHasMore) return
+        viewModelScope.launch {
+            try {
+                val page = app.api.comments(item.id, state.commentsCursor)
+                if (mutable.value.commentsOpen) {
+                    mutable.update {
+                        it.copy(
+                            comments = (it.comments + page.items).distinctBy(CommentItem::id),
+                            commentsCursor = page.cursor,
+                            commentsHasMore = page.hasMore
+                        )
+                    }
+                }
+            } catch (error: Throwable) {
+                mutable.update { it.copy(message = error.userMessage()) }
+            }
+        }
+    }
+
+    fun toggleCommentReplies(comment: CommentItem) {
+        val item = currentVideo() ?: return
+        if (mutable.value.commentReplies.containsKey(comment.id)) {
+            mutable.update { it.copy(commentReplies = it.commentReplies - comment.id) }
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val replies = app.api.commentReplies(item.id, comment.id).items
+                mutable.update { it.copy(commentReplies = it.commentReplies + (comment.id to replies)) }
+            } catch (error: Throwable) {
+                mutable.update { it.copy(message = error.userMessage()) }
+            }
+        }
+    }
+
+    fun openUserProfile(author: AuthorInfo) {
+        if (author.secUid.isBlank()) {
+            mutable.update { it.copy(message = "该用户主页暂不可用") }
+            return
+        }
+        mutable.update {
+            it.copy(
+                userProfile = author,
+                userProfileVideos = emptyList(),
+                userProfileHasMore = false,
+                commentsOpen = false,
+                settingsOpen = false
+            )
+        }
+        userProfileCursor = 0L
+        viewModelScope.launch {
+            try {
+                val profile = if (author.nickname.isBlank()) app.api.userProfile(author.secUid) else author
+                val page = app.api.userPosts(profile.secUid)
+                userProfileCursor = page.cursor
+                if (mutable.value.userProfile?.secUid == profile.secUid || mutable.value.userProfile?.secUid.isNullOrBlank()) {
+                    mutable.update {
+                        it.copy(userProfile = profile, userProfileVideos = page.items, userProfileHasMore = page.hasMore)
+                    }
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutable.update { it.copy(message = error.userMessage()) }
+            }
+        }
+    }
+
+    fun loadMoreUserPosts() {
+        val profile = mutable.value.userProfile ?: return
+        if (mutable.value.loadingMore || !mutable.value.userProfileHasMore) return
+        viewModelScope.launch {
+            mutable.update { it.copy(loadingMore = true) }
+            try {
+                val page = app.api.userPosts(profile.secUid, userProfileCursor)
+                userProfileCursor = page.cursor
+                if (mutable.value.userProfile?.secUid == profile.secUid) {
+                    mutable.update {
+                        it.copy(
+                            userProfileVideos = (it.userProfileVideos + page.items).distinctBy(VideoItem::id),
+                            userProfileHasMore = page.hasMore,
+                            loadingMore = false
+                        )
+                    }
+                } else {
+                    mutable.update { it.copy(loadingMore = false) }
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                mutable.update { it.copy(loadingMore = false, message = error.userMessage()) }
+            }
+        }
+    }
+
+    fun closeUserProfile() = mutable.update {
+        it.copy(userProfile = null, userProfileVideos = emptyList(), userProfileHasMore = false)
+    }
+
     fun dismissMessage() = mutable.update { it.copy(message = "") }
 
     fun handleBack(): Boolean {
@@ -500,6 +636,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             state.qrLogin.status != QrLoginStatus.IDLE -> {
                 closeQrLogin(); true
+            }
+            state.userProfile != null -> {
+                closeUserProfile(); true
             }
             state.commentsOpen -> {
                 hideComments(); true

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.VerticalPager
@@ -39,6 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.ChatBubble
 import androidx.compose.material.icons.rounded.Close
@@ -105,7 +108,12 @@ import coil3.compose.AsyncImage
 import com.mytv.cn.data.AppSettings
 import com.mytv.cn.data.AuthorInfo
 import com.mytv.cn.data.ChannelItem
+import com.mytv.cn.data.CodecPreference
 import com.mytv.cn.data.CommentItem
+import com.mytv.cn.data.DanmakuItem
+import com.mytv.cn.data.LiveDanmakuItem
+import com.mytv.cn.data.LiveResolution
+import com.mytv.cn.data.VideoResolution
 import com.mytv.cn.data.FeedKind
 import com.mytv.cn.data.LiveRoomItem
 import com.mytv.cn.data.ProfileTab
@@ -160,6 +168,7 @@ fun MyTvApp(viewModel: MainViewModel, isInPictureInPicture: Boolean) {
                             player = viewModel.player,
                             playerState = playerState,
                             onSelectVideo = viewModel::selectVideo,
+                            onOpenProfile = viewModel::openUserProfile,
                             onTogglePlayback = viewModel::togglePlayback,
                             onFeedKind = viewModel::selectFeedKind,
                             onFeaturedChannel = viewModel::selectFeaturedChannel,
@@ -183,6 +192,8 @@ fun MyTvApp(viewModel: MainViewModel, isInPictureInPicture: Boolean) {
                             onQuery = viewModel::updateSearchQuery,
                             onSearch = viewModel::submitSearch,
                             onVideo = viewModel::openVideo,
+                            onOpenProfile = viewModel::openUserProfile,
+                            onOpenLive = viewModel::openLive,
                             onRefresh = viewModel::refresh
                         )
                         RootTab.ME -> ProfileScreen(
@@ -193,6 +204,17 @@ fun MyTvApp(viewModel: MainViewModel, isInPictureInPicture: Boolean) {
                             onLogin = viewModel::startQrLogin,
                             onSettings = viewModel::showSettings,
                             onRefresh = viewModel::refresh
+                        )
+                    }
+
+                    ui.userProfile?.let { author ->
+                        UserProfileScreen(
+                            author = author,
+                            videos = ui.userProfileVideos,
+                            hasMore = ui.userProfileHasMore,
+                            onLoadMore = viewModel::loadMoreUserPosts,
+                            onVideo = viewModel::openVideo,
+                            onBack = viewModel::closeUserProfile
                         )
                     }
 
@@ -220,8 +242,12 @@ fun MyTvApp(viewModel: MainViewModel, isInPictureInPicture: Boolean) {
                 if (ui.commentsOpen) {
                     CommentsSheet(
                         comments = ui.comments,
+                        replies = ui.commentReplies,
+                        hasMore = ui.commentsHasMore,
                         loading = ui.commentsLoading,
-                        onDismiss = viewModel::hideComments
+                        onDismiss = viewModel::hideComments,
+                        onToggleReplies = viewModel::toggleCommentReplies,
+                        onLoadMore = viewModel::loadMoreComments
                     )
                 }
                 if (ui.settingsOpen) {
@@ -246,6 +272,7 @@ private fun VideoFeedScreen(
     player: Player,
     playerState: PlayerState,
     onSelectVideo: (Int) -> Unit,
+    onOpenProfile: (AuthorInfo) -> Unit,
     onTogglePlayback: () -> Unit,
     onFeedKind: (FeedKind) -> Unit,
     onFeaturedChannel: (ChannelItem) -> Unit,
@@ -307,9 +334,15 @@ private fun VideoFeedScreen(
                     )
                 }
 
+                DanmakuOverlay(
+                    items = ui.videoDanmaku,
+                    positionMs = playerState.positionMs,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 64.dp)
+                )
                 VideoMeta(item, Modifier.align(Alignment.BottomStart).padding(start = 18.dp, end = 86.dp, bottom = 88.dp))
                 VideoActions(
                     item = item,
+                    onOpenProfile = { onOpenProfile(item.author) },
                     onLike = onLike,
                     onComments = onComments,
                     onCollect = onCollect,
@@ -409,6 +442,7 @@ private fun VideoMeta(item: VideoItem, modifier: Modifier = Modifier) {
 @Composable
 private fun VideoActions(
     item: VideoItem,
+    onOpenProfile: () -> Unit,
     onLike: () -> Unit,
     onComments: () -> Unit,
     onCollect: () -> Unit,
@@ -419,7 +453,8 @@ private fun VideoActions(
         AsyncImage(
             model = item.author.avatar,
             contentDescription = item.author.nickname,
-            modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.DarkGray),
+            modifier = Modifier.size(48.dp).clip(CircleShape).background(Color.DarkGray)
+                .clickable(onClickLabel = "查看主页") { onOpenProfile() },
             contentScale = ContentScale.Crop
         )
         VideoAction(Icons.Rounded.Favorite, if (item.liked) BrandRed else Color.White, formatCount(item.stats.digg), "喜欢", onLike)
@@ -471,6 +506,10 @@ private fun LiveScreen(
                     Text("${room.owner.nickname}  ${room.onlineText}", color = TextMuted, fontSize = 13.sp)
                 }
             }
+            LiveChatOverlay(
+                ui.liveMessages,
+                Modifier.align(Alignment.BottomStart).padding(start = 14.dp, bottom = 20.dp)
+            )
             if (playerState.loading) CircularProgressIndicator(Modifier.align(Alignment.Center), color = BrandRed)
             if (!playerState.isPlaying && !playerState.loading) {
                 IconButton(onClick = { if (playerState.isPlaying) player.pause() else player.play() }, Modifier.align(Alignment.Center).size(72.dp)) {
@@ -548,6 +587,8 @@ private fun SearchScreen(
     onQuery: (String) -> Unit,
     onSearch: (String) -> Unit,
     onVideo: (VideoItem) -> Unit,
+    onOpenProfile: (AuthorInfo) -> Unit,
+    onOpenLive: (LiveRoomItem) -> Unit,
     onRefresh: () -> Unit
 ) {
     Column(
@@ -571,15 +612,36 @@ private fun SearchScreen(
             Button(onClick = { onSearch(ui.searchQuery) }) { Text("搜索") }
         }
 
-        if (ui.searchResults.videos.isNotEmpty()) {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(150.dp),
-                contentPadding = PaddingValues(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(ui.searchResults.videos, key = { it.id }) { video ->
-                    VideoGridCard(video) { onVideo(video) }
+        if (ui.searchResults.videos.isNotEmpty() || ui.searchResults.users.isNotEmpty() || ui.searchResults.lives.isNotEmpty()) {
+            Column(Modifier.fillMaxSize()) {
+                if (ui.searchResults.users.isNotEmpty()) {
+                    Text("用户", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(18.dp, 12.dp, 18.dp, 6.dp))
+                    LazyRow(contentPadding = PaddingValues(horizontal = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(ui.searchResults.users.size) { index ->
+                            val author = ui.searchResults.users[index]
+                            AuthorCard(author) { onOpenProfile(author) }
+                        }
+                    }
+                }
+                if (ui.searchResults.lives.isNotEmpty()) {
+                    Text("直播", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(18.dp, 14.dp, 18.dp, 6.dp))
+                    LazyRow(contentPadding = PaddingValues(horizontal = 18.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(ui.searchResults.lives.size) { index ->
+                            val room = ui.searchResults.lives[index]
+                            Box(Modifier.width(210.dp)) { LiveCard(room) { onOpenLive(room) } }
+                        }
+                    }
+                }
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(150.dp),
+                    contentPadding = PaddingValues(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    items(ui.searchResults.videos, key = { it.id }) { video ->
+                        VideoGridCard(video) { onVideo(video) }
+                    }
                 }
             }
         } else {
@@ -760,7 +822,15 @@ private fun VideoGridCard(item: VideoItem, onClick: () -> Unit) {
 }
 
 @Composable
-private fun CommentsSheet(comments: List<CommentItem>, loading: Boolean, onDismiss: () -> Unit) {
+private fun CommentsSheet(
+    comments: List<CommentItem>,
+    replies: Map<String, List<CommentItem>>,
+    hasMore: Boolean,
+    loading: Boolean,
+    onDismiss: () -> Unit,
+    onToggleReplies: (CommentItem) -> Unit,
+    onLoadMore: () -> Unit
+) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = PanelBlack,
@@ -784,7 +854,13 @@ private fun CommentsSheet(comments: List<CommentItem>, loading: Boolean, onDismi
         } else {
             LazyColumn(contentPadding = PaddingValues(bottom = 28.dp)) {
                 items(comments.size, key = { comments[it].id }) { index ->
-                    CommentRow(comments[index])
+                    val comment = comments[index]
+                    CommentRow(comment, replies[comment.id].orEmpty()) { onToggleReplies(comment) }
+                }
+                if (hasMore) {
+                    item(key = "load_more_comments") {
+                        OutlinedButton(onClick = onLoadMore, modifier = Modifier.padding(18.dp)) { Text("加载更多评论") }
+                    }
                 }
             }
         }
@@ -792,7 +868,7 @@ private fun CommentsSheet(comments: List<CommentItem>, loading: Boolean, onDismi
 }
 
 @Composable
-private fun CommentRow(item: CommentItem) {
+private fun CommentRow(item: CommentItem, replies: List<CommentItem>, onToggle: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -806,7 +882,28 @@ private fun CommentRow(item: CommentItem) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(item.user.nickname.ifBlank { "抖音用户" }, color = TextMuted, fontSize = 12.sp)
             Text(item.text, color = Color.White)
-            if (item.replyCount > 0) Text("${item.replyCount} 条回复", color = BrandCyan, fontSize = 12.sp)
+            if (item.replyCount > 0) {
+                Text(
+                    if (replies.isEmpty()) "${item.replyCount} 条回复" else "收起回复",
+                    color = BrandCyan,
+                    fontSize = 12.sp,
+                    modifier = Modifier.clickable(onClick = onToggle).padding(vertical = 2.dp)
+                )
+                replies.forEach { reply ->
+                    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AsyncImage(
+                            model = reply.user.avatar,
+                            contentDescription = reply.user.nickname,
+                            modifier = Modifier.size(26.dp).clip(CircleShape).background(Color.DarkGray),
+                            contentScale = ContentScale.Crop
+                        )
+                        Column {
+                            Text(reply.user.nickname.ifBlank { "抖音用户" }, color = TextMuted, fontSize = 11.sp)
+                            Text(reply.text, color = Color.White, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
         }
         Text("♥ ${formatCount(item.diggCount)}", color = TextMuted, fontSize = 12.sp)
     }
@@ -820,6 +917,7 @@ private fun SettingsDialog(
     onDismiss: () -> Unit
 ) {
     var cookie by remember(settings.cookie) { mutableStateOf(settings.cookie) }
+    val speeds = remember { listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 3f) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("设置") },
@@ -833,6 +931,26 @@ private fun SettingsDialog(
                 item { SettingSwitch("直播弹幕", settings.liveDanmaku) { onUpdate { value -> value.copy(liveDanmaku = it) } } }
                 item { SettingSwitch("播放进度条", settings.playerProgressBar) { onUpdate { value -> value.copy(playerProgressBar = it) } } }
                 item { SettingSwitch("精选自动播放", settings.featuredAutoPlay) { onUpdate { value -> value.copy(featuredAutoPlay = it) } } }
+                item {
+                    SettingPills("播放倍速", listOf("0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x", "3x"), speeds.indexOf(settings.playbackSpeed)) { index ->
+                        onUpdate { value -> value.copy(playbackSpeed = speeds[index]) }
+                    }
+                }
+                item {
+                    SettingPills("视频画质", VideoResolution.entries.map { it.label }, VideoResolution.entries.indexOf(settings.videoResolution)) { index ->
+                        onUpdate { value -> value.copy(videoResolution = VideoResolution.entries[index]) }
+                    }
+                }
+                item {
+                    SettingPills("直播画质", LiveResolution.entries.map { it.label }, LiveResolution.entries.indexOf(settings.liveResolution)) { index ->
+                        onUpdate { value -> value.copy(liveResolution = LiveResolution.entries[index]) }
+                    }
+                }
+                item {
+                    SettingPills("编码偏好", CodecPreference.entries.map { it.label }, CodecPreference.entries.indexOf(settings.codecPreference)) { index ->
+                        onUpdate { value -> value.copy(codecPreference = CodecPreference.entries[index]) }
+                    }
+                }
                 item {
                     Text("登录 Cookie", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
                     OutlinedTextField(
@@ -934,6 +1052,141 @@ private fun EmptyState(message: String, onRetry: () -> Unit) {
                 Spacer(Modifier.width(6.dp))
                 Text("重试")
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingPills(title: String, options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, color = Color.White, fontWeight = FontWeight.Bold)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(options.size) { index ->
+                ChannelPill(options[index], index == selectedIndex) { onSelect(index) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserProfileScreen(
+    author: AuthorInfo,
+    videos: List<VideoItem>,
+    hasMore: Boolean,
+    onLoadMore: () -> Unit,
+    onVideo: (VideoItem) -> Unit,
+    onBack: () -> Unit
+) {
+    Column(Modifier.fillMaxSize().background(AppBlack).statusBarsPadding().padding(bottom = 68.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "返回") }
+            Text("个人主页", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            AsyncImage(
+                model = author.avatar,
+                contentDescription = author.nickname,
+                modifier = Modifier.size(72.dp).clip(CircleShape).background(Color.DarkGray),
+                contentScale = ContentScale.Crop
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(author.nickname, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(author.signature.ifBlank { "这个人很神秘" }, color = TextMuted, maxLines = 2)
+                Text(
+                    "${formatCount(author.awemeCount)} 作品   ${formatCount(author.followerCount)} 粉丝   ${formatCount(author.totalFavorited)} 获赞",
+                    color = Color.White,
+                    fontSize = 13.sp
+                )
+            }
+        }
+        if (videos.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("暂无作品", color = TextMuted)
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(140.dp),
+                contentPadding = PaddingValues(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(videos, key = { it.id }) { video ->
+                    VideoGridCard(video) { onVideo(video) }
+                }
+                if (hasMore) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        OutlinedButton(onClick = onLoadMore, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                            Text("加载更多")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DanmakuOverlay(items: List<DanmakuItem>, positionMs: Long, modifier: Modifier = Modifier) {
+    val active = items.filter { it.timeMs > 0 && it.timeMs <= positionMs && positionMs - it.timeMs < 8000 }
+    if (active.isEmpty()) return
+    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        active.takeLast(6).forEach { danmaku ->
+            val progress = ((positionMs - danmaku.timeMs) / 8000f).coerceIn(0f, 1f)
+            Text(
+                danmaku.text,
+                color = Color(danmaku.color.toInt()),
+                fontSize = 15.sp,
+                maxLines = 1,
+                modifier = Modifier.offset(x = 300.dp * (1f - progress))
+            )
+        }
+    }
+}
+
+@Composable
+private fun LiveChatOverlay(messages: List<LiveDanmakuItem>, modifier: Modifier = Modifier) {
+    val visible = messages.filter { it.text.isNotBlank() }.takeLast(8)
+    if (visible.isEmpty()) return
+    Column(
+        modifier.fillMaxWidth(0.72f).background(Color.Black.copy(alpha = .5f), RoundedCornerShape(10.dp)).padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        visible.forEach { message ->
+            Text(
+                if (message.userName.isNotBlank()) "${message.userName}: ${message.text}" else message.text,
+                color = Color.White,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun AuthorCard(author: AuthorInfo, onClick: () -> Unit) {
+    Row(
+        Modifier.width(200.dp).clip(RoundedCornerShape(10.dp)).background(PanelBlack).clickable(onClick = onClick).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        AsyncImage(
+            model = author.avatar,
+            contentDescription = author.nickname,
+            modifier = Modifier.size(44.dp).clip(CircleShape).background(Color.DarkGray),
+            contentScale = ContentScale.Crop
+        )
+        Column(Modifier.weight(1f)) {
+            Text(author.nickname, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${formatCount(author.followerCount)} 粉丝", color = TextMuted, fontSize = 12.sp)
         }
     }
 }
